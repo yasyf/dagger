@@ -130,7 +130,7 @@ func listArtifactSelection(ctx context.Context, dag *dagger.Client, selection *c
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := writeArtifactList(cmd, output, names); err != nil {
+	if err := writeArtifactList(ctx, cmd, output, names); err != nil {
 		return err
 	}
 	if len(output) < len(items) || slices.ContainsFunc(output, func(item listedArtifact) bool { return len(item.Presence) > 0 }) {

@@ -110,8 +110,7 @@ type frontendPretty struct {
 	quitting    bool
 	done        bool
 	err         error
-	cleanupErr  error
-	cleanup     cleanups.CleanupF
+	cleanup     func()
 
 	// lifecycle channels
 	quit          chan struct{}
@@ -2771,7 +2770,12 @@ func (fe *frontendPretty) runWithTUI(ctx context.Context, run func(context.Conte
 			fe.tui.Stop()
 			fe.termStopped = true
 
-			return fe.runResult()
+			// if the ctx was canceled, we don't need to return whatever random garbage
+			// error string we got back; just return the ctx err.
+			if fe.runCtx.Err() != nil {
+				return context.Cause(fe.runCtx)
+			}
+			return fe.err
 
 		case req := <-fe.backgroundReq:
 			req.done <- fe.tui.Exec(func(in io.Reader, out io.Writer, errOut io.Writer) error {
@@ -2796,30 +2800,6 @@ func (fe *frontendPretty) runWithTUI(ctx context.Context, run func(context.Conte
 			})
 		}
 	}
-}
-
-// Cancellation normally determines the exit status, but it must not hide a
-// cleanup failure. In particular, an ordinary shell exit must become a failed
-// exit if the frontend could not finish delivering the command's output.
-func (fe *frontendPretty) runResult() error {
-	err := fe.err
-	if fe.runCtx.Err() != nil {
-		if fe.cleanupErr == nil {
-			return context.Cause(fe.runCtx)
-		}
-		err = errors.Join(err, context.Cause(fe.runCtx))
-	}
-	if fe.cleanupErr != nil {
-		var exit ExitError
-		if errors.As(err, &exit) {
-			if exit.Code() == 0 {
-				return ExitError{OriginalCode: 1, Original: err}
-			}
-		} else if errors.Is(err, ErrShellExited) {
-			return ExitError{OriginalCode: 1, Original: err}
-		}
-	}
-	return err
 }
 
 func (fe *frontendPretty) startTUI() {
@@ -2988,24 +2968,23 @@ func (fe *frontendPretty) spawnRun() {
 		if !fe.NoExit || fe.interrupted {
 			if cleanup != nil {
 				go func() {
-					cleanErr := cleanup()
-					if cleanErr != nil {
+					if cleanErr := cleanup(); cleanErr != nil {
 						slog.Error("cleanup failed", "err", cleanErr)
 					}
 					fe.dispatch(func() {
-						fe.cleanupErr = cleanErr
-						fe.handleDone(errors.Join(err, cleanErr))
+						fe.handleDone(err)
 					})
 				}()
 			} else {
 				fe.handleDone(err)
 			}
 		} else {
-			fe.cleanup = func() error {
+			fe.cleanup = func() {
 				if cleanup != nil {
-					return cleanup()
+					if cleanErr := cleanup(); cleanErr != nil {
+						slog.Error("cleanup failed", "err", cleanErr)
+					}
 				}
-				return nil
 			}
 			fe.handleDone(err)
 		}
@@ -3055,29 +3034,13 @@ func (fe *frontendPretty) doQuit() {
 // FinalRender is called after the program has finished running and prints the
 // final output after the TUI has exited.
 func (fe *frontendPretty) FinalRender(w io.Writer) error {
-	out := NewOutput(w, termenv.WithProfile(fe.profile))
-	printTraceMessage := false
-	defer func() {
-		if printTraceMessage {
-			fmt.Fprintln(w)
-		}
-		var telemetryErr error
-		if p := fe.telemetryError.Load(); p != nil {
-			telemetryErr = *p
-		}
-		// Teardown warnings must survive even when there is no progress report
-		// or trace-link message, including an early quiet-error return.
-		handleTelemetryErrorOutput(w, out, telemetryErr)
-		if printTraceMessage {
-			fmt.Fprintln(os.Stderr, fe.msgPreFinalRender.String())
-		}
-	}()
-
 	if exitCode, ok := renderQuietError(w, fe.err); ok {
 		return ExitError{OriginalCode: exitCode, Original: fe.err}
 	}
 
 	fe.setupFinalRenderLocked()
+
+	out := NewOutput(w, termenv.WithProfile(fe.profile))
 
 	// Only separate the primary output from a report actually rendered above it.
 	var rendered bool
@@ -3087,7 +3050,17 @@ func (fe *frontendPretty) FinalRender(w io.Writer) error {
 			rendered = true
 		}
 
-		printTraceMessage = fe.msgPreFinalRender.Len() > 0
+		if fe.msgPreFinalRender.Len() > 0 {
+			defer func() {
+				fmt.Fprintln(w)
+				var telemetryErr error
+				if p := fe.telemetryError.Load(); p != nil {
+					telemetryErr = *p
+				}
+				handleTelemetryErrorOutput(w, out, telemetryErr)
+				fmt.Fprintln(os.Stderr, fe.msgPreFinalRender.String())
+			}()
+		}
 	}
 
 	if fe.err != nil && fe.shell == nil {
@@ -7654,13 +7627,8 @@ func (fe *frontendPretty) quitAction(interruptErr error) {
 		cleanup := fe.cleanup
 		fe.cleanup = nil // prevent double cleanup
 		go func() {
-			cleanErr := cleanup()
-			if cleanErr != nil {
-				slog.Error("cleanup failed", "err", cleanErr)
-			}
+			cleanup()
 			fe.dispatch(func() {
-				fe.cleanupErr = cleanErr
-				fe.err = errors.Join(fe.err, cleanErr)
 				fe.quitting = true
 				fe.doQuit()
 			})

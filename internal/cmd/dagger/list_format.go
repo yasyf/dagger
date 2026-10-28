@@ -1,6 +1,7 @@
 package daggercmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/dagger/dagger/core/artifact"
 	"github.com/dagger/dagger/core/dagaddress"
+	"github.com/dagger/dagger/dagql/idtui"
 	"github.com/spf13/cobra"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -25,7 +27,13 @@ func validateArtifactListFormat(format string) error {
 
 // All formats use the same rows. Names maps exact dimension identifiers to
 // unambiguous CLI flag names; it does not change item identity.
-func writeArtifactList(cmd *cobra.Command, items []listedArtifact, names map[string]string) error {
+func writeArtifactList(ctx context.Context, cmd *cobra.Command, items []listedArtifact, names map[string]string) error {
+	return idtui.WriteOutputFile(ctx, cmd.OutOrStdout(), func(out io.Writer) error {
+		return writeArtifactListTo(cmd, out, items, names)
+	})
+}
+
+func writeArtifactListTo(cmd *cobra.Command, out io.Writer, items []listedArtifact, names map[string]string) error {
 	format, _ := cmd.Flags().GetString("format")
 	if err := validateArtifactListFormat(format); err != nil {
 		return err
@@ -37,14 +45,14 @@ func writeArtifactList(cmd *cobra.Command, items []listedArtifact, names map[str
 	}
 	if format == "link" {
 		for _, item := range items {
-			if _, err := fmt.Fprintln(cmd.OutOrStdout(), item.URI); err != nil {
+			if _, err := fmt.Fprintln(out, item.URI); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	if format == "cli" {
-		return writeArtifactCLI(cmd.OutOrStdout(), items, names, artifactListReplayArgs(cmd))
+		return writeArtifactCLI(out, items, names, artifactListReplayArgs(cmd))
 	}
 	// Mixed types use separate tables, not sparse columns for every type.
 	groups := map[string][]listedArtifact{}
@@ -63,11 +71,11 @@ func writeArtifactList(cmd *cobra.Command, items []listedArtifact, names map[str
 	}
 	for i, typ := range order {
 		if i > 0 {
-			if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
+			if _, err := fmt.Fprintln(out); err != nil {
 				return err
 			}
 		}
-		if err := writeArtifactTable(cmd.OutOrStdout(), groups[typ], names); err != nil {
+		if err := writeArtifactTable(out, groups[typ], names); err != nil {
 			return err
 		}
 	}
@@ -114,8 +122,7 @@ func writeArtifactTable(out io.Writer, items []listedArtifact, names map[string]
 	if described {
 		header = append(header, "DESCRIPTION")
 	}
-	buffer := &artifactTableBuffer{out: out}
-	writer := tabwriter.NewWriter(buffer, 0, 4, 2, ' ', 0)
+	writer := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(writer, strings.Join(header, "\t")); err != nil {
 		return err
 	}
@@ -145,53 +152,7 @@ func writeArtifactTable(out io.Writer, items []listedArtifact, names map[string]
 			return err
 		}
 	}
-	if err := writer.Flush(); err != nil {
-		return err
-	}
-	return buffer.Flush()
-}
-
-// tabwriter writes whole cells and ASCII padding. Coalesce those writes without
-// splitting a cell: an arbitrary byte boundary can split a UTF-8 character and
-// turn an otherwise valid table into invalid telemetry string records.
-type artifactTableBuffer struct {
-	out  io.Writer
-	data []byte
-}
-
-const artifactTableBufferSize = 4096
-
-func (b *artifactTableBuffer) Write(p []byte) (int, error) {
-	if len(b.data)+len(p) > artifactTableBufferSize {
-		if err := b.Flush(); err != nil {
-			return 0, err
-		}
-	}
-	if len(p) >= artifactTableBufferSize {
-		// A large cell is already a complete UTF-8 string. Forward it whole
-		// rather than retaining a second copy or cutting it into records.
-		n, err := b.out.Write(p)
-		if n != len(p) && err == nil {
-			err = io.ErrShortWrite
-		}
-		return n, err
-	}
-	b.data = append(b.data, p...)
-	return len(p), nil
-}
-
-func (b *artifactTableBuffer) Flush() error {
-	if len(b.data) == 0 {
-		return nil
-	}
-	n, err := b.out.Write(b.data)
-	if n != len(b.data) && err == nil {
-		err = io.ErrShortWrite
-	}
-	if err == nil {
-		b.data = b.data[:0]
-	}
-	return err
+	return writer.Flush()
 }
 
 // compareArtifactDimensions orders the module dimension first and type

@@ -19,7 +19,7 @@ func TestArtifactListFormats(t *testing.T) {
 		cmd.Flags().String("format", format, "")
 		var out bytes.Buffer
 		cmd.SetOut(&out)
-		require.NoError(t, writeArtifactList(cmd, rows, names))
+		require.NoError(t, writeArtifactList(t.Context(), cmd, rows, names))
 		return out.String()
 	}
 	t.Run("type dimension identifies operations on the same item", func(t *testing.T) {

@@ -11,17 +11,7 @@ import (
 	"github.com/muesli/termenv"
 	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/log"
-	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
-
-type loggerProviderKey struct{}
-
-// ContextWithLoggerProvider selects the provider used by SpanLogger and
-// GlobalLogger, including loggers rebound to child spans. It does not change
-// the provider telemetry.SpanStdio uses for command stdout and stderr.
-func ContextWithLoggerProvider(ctx context.Context, provider *sdklog.LoggerProvider) context.Context {
-	return context.WithValue(ctx, loggerProviderKey{}, provider)
-}
 
 const (
 	debugBaggageKey   = "debug"
@@ -67,9 +57,6 @@ func ColorProfileFromContext(ctx context.Context) termenv.Profile {
 // - If debug=true is set in baggage, the log level will be Debug. Otherwise,
 // it will be Info.
 func SpanLogger(ctx context.Context, name string, attrs ...log.KeyValue) *Logger {
-	if provider, ok := ctx.Value(loggerProviderKey{}).(*sdklog.LoggerProvider); ok {
-		ctx = telemetry.WithLoggerProvider(ctx, provider)
-	}
 	bag := baggage.FromContext(ctx)
 	profile := termenv.ANSI
 	if bag.Member(noColorBaggageKey).Value() == "true" {
