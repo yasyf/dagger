@@ -8,6 +8,7 @@ import (
 
 	telemetry "github.com/dagger/otel-go"
 	"github.com/stretchr/testify/require"
+	apilog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
@@ -59,6 +60,29 @@ func TestOutputShutdownFailureIsReturnedToCommandCleanup(t *testing.T) {
 	require.ErrorIs(t, p.Shutdown(t.Context()), expected)
 	require.ErrorIs(t, outputLogError([]sdklog.Processor{p}), expected)
 	require.NoError(t, outputLogError(nil), "remote-only telemetry does not fail the command")
+}
+
+func TestCloudShutdownDeadlineDoesNotFailLocalOutput(t *testing.T) {
+	local := new(countingLogExporter)
+	output := &outputLogProcessor{Processor: telemetry.NewBlockingLogProcessor(local)}
+	remote := sdklog.NewBatchProcessor(&shutdownErrorLogExporter{err: context.DeadlineExceeded})
+	processors := []sdklog.Processor{output, remote}
+	provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(output), sdklog.WithProcessor(remote))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	var record sdklog.Record
+	record.SetBody(apilog.StringValue("command output"))
+	require.NoError(t, output.OnEmit(t.Context(), &record))
+
+	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	// Local output gets its own deadline, even if command cancellation or
+	// diagnostic shutdown has already used the caller's deadline.
+	require.NoError(t, shutdownOutputLogs(expired, processors))
+	require.Positive(t, local.exports.Load(), "queued local output was drained")
+	// Model the expired shared deadline after a hanging Cloud span exporter.
+	// The remote failure must remain visible without failing local output.
+	require.ErrorIs(t, provider.Shutdown(expired), context.DeadlineExceeded)
+	require.NoError(t, outputLogError(processors))
 }
 
 type admissionErrorLogProcessor struct {

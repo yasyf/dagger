@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	telemetry "github.com/dagger/otel-go"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -55,6 +56,21 @@ func (p *outputLogProcessor) recordError(err error) error {
 	err = fmt.Errorf("frontend output could not be delivered: %w", err)
 	p.err.CompareAndSwap(nil, &err)
 	return err
+}
+
+// Finish local output before closing the shared providers. A remote exporter
+// can use their entire shutdown deadline; it must not leave the frontend with
+// an expired context and turn a Cloud outage into a command failure.
+func shutdownOutputLogs(ctx context.Context, processors []sdklog.Processor) error {
+	flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	var result error
+	for _, processor := range processors {
+		if p, ok := processor.(*outputLogProcessor); ok {
+			result = errors.Join(result, p.Shutdown(flushCtx))
+		}
+	}
+	return result
 }
 
 func outputLogError(processors []sdklog.Processor) error {

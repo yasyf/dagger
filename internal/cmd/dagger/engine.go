@@ -602,8 +602,9 @@ func initEngineTelemetry(ctx context.Context) (context.Context, func(error) erro
 		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		diagnosticErr := diagnostics.Shutdown(flushCtx)
+		outputErr := shutdownOutputLogs(ctx, cfg.LogProcessors)
 		closeErr := telemetry.CloseWithError()
-		if err := errors.Join(diagnosticErr, closeErr); err != nil {
+		if err := errors.Join(diagnosticErr, outputErr, closeErr); err != nil {
 			Frontend.SetTelemetryError(err)
 		}
 		return outputLogError(cfg.LogProcessors)
