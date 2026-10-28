@@ -2,11 +2,14 @@ package daggercmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/dagger/dagger/dagql/dagui"
+	"github.com/dagger/dagger/dagql/idtui"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/client"
 	"github.com/dagger/dagger/engine/client/imageload"
@@ -169,13 +172,12 @@ func withEngineAction(
 
 		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
 			if opts.Debug {
-				slog.Error("failed to emit telemetry", "error", err)
+				slog.Diagnostic().Error("failed to emit telemetry", "error", err)
 			}
 			Frontend.SetTelemetryError(err)
 		}))
 		cleanup.Add("close telemetry", func() error {
-			cleanupTelemetry(rerr)
-			return nil
+			return cleanupTelemetry(rerr)
 		})
 
 		params, err := finalizeEngineParams(ctx, params)
@@ -387,13 +389,12 @@ func withLazySessions(
 		ctx, cleanupTelemetry := initEngineTelemetry(ctx)
 		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
 			if opts.Debug {
-				slog.Error("failed to emit telemetry", "error", err)
+				slog.Diagnostic().Error("failed to emit telemetry", "error", err)
 			}
 			Frontend.SetTelemetryError(err)
 		}))
 		cleanup.Add("close telemetry", func() error {
-			cleanupTelemetry(rerr)
-			return nil
+			return cleanupTelemetry(rerr)
 		})
 
 		connect := func(ctx context.Context) (*client.Client, func(), error) {
@@ -516,7 +517,6 @@ func engineTelemetryConfigWithCloud(ctx context.Context, configuredCloudExporter
 	cloud := noCloudTelemetry
 	if !frontendTelemetryDisabled(ctx) {
 		cfg.LiveTraceExporters = append(cfg.LiveTraceExporters, Frontend.SpanExporter())
-		cfg.LiveLogExporters = append(cfg.LiveLogExporters, Frontend.LogExporter())
 		cfg.LiveMetricExporters = append(cfg.LiveMetricExporters, Frontend.MetricExporter())
 	}
 	if !skipSharedTelemetryExporters {
@@ -541,7 +541,7 @@ func engineTelemetryConfigWithCloud(ctx context.Context, configuredCloudExporter
 	return cfg, cloud
 }
 
-func initEngineTelemetry(ctx context.Context) (context.Context, func(error)) {
+func initEngineTelemetry(ctx context.Context) (context.Context, func(error) error) {
 	cfg, cloud := engineTelemetryConfig(ctx)
 	// Init replaces telemetry.SpanProcessors but appends to LogProcessors and
 	// MetricExporters, which may hold an earlier Init's entries.
@@ -549,8 +549,31 @@ func initEngineTelemetry(ctx context.Context) (context.Context, func(error)) {
 		cloud.logs += len(telemetry.LogProcessors)
 		cloud.metrics += len(telemetry.MetricExporters)
 	}
+	firstLogProcessor := len(telemetry.LogProcessors)
 	ctx = telemetry.Init(ctx, cfg)
 	cliCloudTelemetry = cloud
+
+	// Install the frontend separately: telemetry.Init wraps LiveLogExporters
+	// in dropping batch processors. Command stdio and forwarded engine logs
+	// must instead wait for local queue space. Remote exporters stay batched.
+	var frontendLogs *enginetel.BlockingLogProcessor
+	if !frontendTelemetryDisabled(ctx) {
+		frontendLogs = enginetel.NewBlockingLogProcessor(
+			Frontend.LogExporter(), enginetel.LogQueueSize,
+			enginetel.LogExportMaxBatchSize, telemetry.NearlyImmediate,
+		)
+		logOpts := []sdklog.LoggerProviderOption{
+			sdklog.WithResource(cfg.Resource),
+			sdklog.WithProcessor(frontendLogs),
+		}
+		for _, processor := range telemetry.LogProcessors[firstLogProcessor:] {
+			logOpts = append(logOpts, sdklog.WithProcessor(processor))
+		}
+		ctx = telemetry.WithLoggerProvider(ctx, sdklog.NewLoggerProvider(logOpts...))
+		// Engine log forwarding uses the same local processor. Append it so
+		// the Cloud indexes computed above remain valid.
+		telemetry.LogProcessors = append(telemetry.LogProcessors, frontendLogs)
+	}
 	// telemetry.Init extracts inherited OTel baggage from the environment.
 	// Re-apply explicit local process settings afterward so a nested Dagger
 	// command's own NO_COLOR/debug request wins over parent baggage.
@@ -588,11 +611,36 @@ func initEngineTelemetry(ctx context.Context) (context.Context, func(error)) {
 	rootCmd.SetOut(stdio.Stdout)
 	rootCmd.SetErr(stdio.Stderr)
 
-	return ctx, func(rerr error) {
+	return ctx, func(rerr error) error {
 		rootCmd.SetOut(oldOut)
 		rootCmd.SetErr(oldErr)
-		stdio.Close()
+		// EOF emission can wait for queue space too. Give it the same bounded
+		// budget as the local drain, before starting remote shutdown.
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		err := drainCLIOutput(flushCtx, frontendLogs)
+		cancel()
+		var drainErr error
+		if err != nil {
+			drainErr = &idtui.OutputDrainError{Err: err}
+		}
+		rerr = errors.Join(rerr, drainErr)
 		telemetry.EndWithCause(span, &rerr)
+		// telemetry.Close owns the remote providers created by Init.
 		telemetry.Close()
+		return drainErr
 	}
+}
+
+func drainCLIOutput(ctx context.Context, processor *enginetel.BlockingLogProcessor) error {
+	// SpanStdio wrappers own no resources: Close only emits EOF records.
+	// Create the EOF writers with the drain context instead of closing the
+	// command writers, which retain the command's unbounded emission context.
+	err := telemetry.SpanStdio(ctx, InstrumentationLibrary).Close()
+	if processor == nil {
+		return err
+	}
+	shutdownErr := processor.Shutdown(ctx)
+	// OTel Writer.Close does not propagate OnEmit errors. Check the context
+	// explicitly so a failed EOF emission cannot be mistaken for success.
+	return errors.Join(err, context.Cause(ctx), shutdownErr)
 }

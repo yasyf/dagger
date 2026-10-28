@@ -430,3 +430,51 @@ func TestWriterFlushAndWarnErrorFanout(t *testing.T) {
 		t.Errorf("Flush after completion = %v, want nil", err)
 	}
 }
+
+// Diagnostics must stay nonblocking even when stderr is stalled. Bytes in
+// flight count toward the limit, and dropped writes must not affect Flush.
+func TestWriterTryWriteWithBlockedDestination(t *testing.T) {
+	gate := make(chan struct{})
+	entered := make(chan struct{})
+	w := NewWriter(diagnosticTestWriterFunc(func(p []byte) (int, error) {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-gate
+		return len(p), nil
+	}), 4)
+	release := sync.OnceFunc(func() { close(gate) })
+	defer release()
+	w.SyncWarn = true
+	if !w.TryWrite([]byte("abcd")) {
+		t.Fatal("initial write rejected")
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("destination was not called")
+	}
+	done := make(chan bool, 1)
+	go func() { done <- w.TryWrite([]byte("e")) }()
+	select {
+	case accepted := <-done:
+		if accepted {
+			t.Fatal("accepted a write beyond the limit")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("TryWrite waited on the destination")
+	}
+	if w.TryWrite([]byte("oversized")) {
+		t.Fatal("accepted an oversized write")
+	}
+	release()
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type diagnosticTestWriterFunc func([]byte) (int, error)
+
+func (f diagnosticTestWriterFunc) Write(p []byte) (int, error) { return f(p) }

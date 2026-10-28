@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -124,4 +125,99 @@ func TestBlockingLogProcessorShutdownIsBounded(t *testing.T) {
 	require.ErrorIs(t, p.Shutdown(shutdownCtx), context.DeadlineExceeded)
 	require.Less(t, time.Since(start), 10*time.Second)
 	require.NoError(t, <-waiting, "a waiting producer is released by Shutdown")
+}
+
+// Exporter implementations can block in terminal I/O without observing ctx.
+// Shutdown must return at cancellation and close the exporter only after the
+// in-flight export ends, including when Shutdown itself ignores cancellation.
+func TestBlockingLogProcessorShutdownWithUncooperativeExporter(t *testing.T) {
+	for _, blockIn := range []string{"export", "shutdown"} {
+		t.Run(blockIn, func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			defer close(release)
+			exporter := &uncooperativeLogExporter{entered: entered, release: release, blockIn: blockIn, shutdownCalled: make(chan struct{})}
+			p := NewBlockingLogProcessor(exporter, 1, 1, 0)
+			require.NoError(t, p.OnEmit(t.Context(), blockingTestRecord(0)))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() { result <- p.Shutdown(ctx) }()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("exporter did not reach blocking operation")
+			}
+			cancel()
+			select {
+			case err := <-result:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(5 * time.Second):
+				t.Fatal("Shutdown waited for an uncooperative exporter")
+			}
+			if blockIn == "export" {
+				select {
+				case <-exporter.shutdownCalled:
+					t.Fatal("exporter Shutdown raced its active Export")
+				default:
+				}
+			}
+		})
+	}
+}
+
+type uncooperativeLogExporter struct {
+	entered, release chan struct{}
+	blockIn          string
+	shutdownCalled   chan struct{}
+	exportCalls      atomic.Int32
+}
+
+func (e *uncooperativeLogExporter) Export(context.Context, []sdklog.Record) error {
+	if e.exportCalls.Add(1) == 1 && e.blockIn == "export" {
+		close(e.entered)
+		<-e.release
+	}
+	return nil
+}
+
+func (e *uncooperativeLogExporter) Shutdown(context.Context) error {
+	close(e.shutdownCalled)
+	if e.blockIn == "shutdown" {
+		close(e.entered)
+		<-e.release
+	}
+	return nil
+}
+
+func (*uncooperativeLogExporter) ForceFlush(context.Context) error { return nil }
+
+// A context-ignoring export may complete successfully after Shutdown returns.
+// Its success must not start another batch or retain the canceled queue.
+func TestBlockingLogProcessorStopsAfterCanceledExport(t *testing.T) {
+	exporter := &uncooperativeLogExporter{
+		entered: make(chan struct{}), release: make(chan struct{}),
+		blockIn: "export", shutdownCalled: make(chan struct{}),
+	}
+	release := sync.OnceFunc(func() { close(exporter.release) })
+	defer release()
+	p := NewBlockingLogProcessor(exporter, 1, 1, 0)
+	require.NoError(t, p.OnEmit(t.Context(), blockingTestRecord(0)))
+	select {
+	case <-exporter.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("export did not start")
+	}
+	require.NoError(t, p.OnEmit(t.Context(), blockingTestRecord(1)))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, p.Shutdown(ctx), context.Canceled)
+	release()
+	select {
+	case <-p.shutdownDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background cleanup did not finish")
+	}
+	require.Equal(t, int32(1), exporter.exportCalls.Load(), "canceled queue must not reach exporter")
+	require.Empty(t, p.queue, "canceled records must be released")
 }

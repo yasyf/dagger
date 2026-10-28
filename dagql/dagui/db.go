@@ -1312,7 +1312,7 @@ func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
 				span.CallPayload = ""
 				span.callPayloadElided = true
 			} else {
-				slog.Warn("failed to decode span call payload", "digest", span.CallDigest, "err", err)
+				slog.Diagnostic().Warn("failed to decode span call payload", "digest", span.CallDigest, "err", err)
 			}
 		}
 	}

@@ -38,17 +38,17 @@ func (db *DB) ingestCallPayload(record sdklog.Record) bool {
 	}
 
 	if record.Body().Kind() != otellog.KindBytes {
-		slog.Warn("dropping malformed call payload record", "reason", "body must be bytes", "kind", record.Body().Kind())
+		slog.Diagnostic().Warn("dropping malformed call payload record", "reason", "body must be bytes", "kind", record.Body().Kind())
 		return true
 	}
 
 	decoded := new(callpbv1.Call)
 	if err := proto.Unmarshal(record.Body().AsBytes(), decoded); err != nil {
-		slog.Warn("dropping malformed call payload record", "reason", "invalid call payload", "err", err)
+		slog.Diagnostic().Warn("dropping malformed call payload record", "reason", "invalid call payload", "err", err)
 		return true
 	}
 	if decoded.GetDigest() == "" {
-		slog.Warn("dropping malformed call payload record", "reason", "missing embedded digest")
+		slog.Diagnostic().Warn("dropping malformed call payload record", "reason", "missing embedded digest")
 		return true
 	}
 	if !db.addCall(decoded.GetDigest(), decoded) {

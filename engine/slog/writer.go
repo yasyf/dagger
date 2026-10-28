@@ -86,6 +86,28 @@ func (w *Writer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// TryWrite queues p without waiting for destination I/O or queue space.
+// It returns false if p would exceed the byte limit, including bytes in flight.
+// Unlike Write, it never admits an oversized line or waits for SyncWarn.
+func (w *Writer) TryWrite(p []byte) bool {
+	w.mu.Lock()
+	if len(w.pending)+w.inflight+len(p) > w.limit {
+		w.mu.Unlock()
+		return false
+	}
+	wasEmpty := len(w.pending) == 0
+	w.pending = append(w.pending, p...)
+	w.queued += uint64(len(p))
+	w.mu.Unlock()
+	if wasEmpty && len(p) > 0 {
+		select {
+		case w.kick <- struct{}{}:
+		default:
+		}
+	}
+	return true
+}
+
 // writeSync queues p and waits until it is written.
 func (w *Writer) writeSync(p []byte) (int, error) {
 	if len(p) == 0 {

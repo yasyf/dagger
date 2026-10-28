@@ -781,7 +781,7 @@ func (c *Client) runSessionAttachables() {
 			// engine closed the connection, and with it retired the session.
 			err := c.sessionLostError(time.Now())
 			c.sessionLost.Store(&err)
-			slog.Error("engine closed the session", "error", err)
+			slog.Diagnostic().Error("engine closed the session", "error", err)
 		}
 		return nil
 	})
@@ -985,10 +985,10 @@ func (c *Client) Close() (rerr error) {
 		select {
 		case err := <-drained:
 			if err != nil {
-				slog.Warn("telemetry drain failed after shutdown", "err", err)
+				slog.Diagnostic().Warn("telemetry drain failed after shutdown", "err", err)
 			}
 		case <-ctx.Done():
-			slog.Warn("telemetry drain timed out after shutdown", "timeout", clientShutdownTimeout())
+			slog.Diagnostic().Warn("telemetry drain timed out after shutdown", "timeout", clientShutdownTimeout())
 		}
 		cancel()
 	}
@@ -1046,7 +1046,7 @@ func (c *Client) Close() (rerr error) {
 	// returned, for the same reason as the post-shutdown drain above.
 	if c.telemetry != nil {
 		if err := c.telemetry.Wait(); err != nil {
-			slog.Warn("telemetry drain failed", "err", err)
+			slog.Diagnostic().Warn("telemetry drain failed", "err", err)
 		}
 	}
 
@@ -1483,7 +1483,7 @@ func clientShutdownTimeout() time.Duration {
 		if interval, err := time.ParseDuration(timeoutStr); err == nil {
 			timeout = interval
 		} else {
-			slog.Warn("invalid "+shutdownTimeoutEnvName+" value, using default 10 seconds", "error", err)
+			slog.Diagnostic().Warn("invalid "+shutdownTimeoutEnvName+" value, using default 10 seconds", "error", err)
 		}
 	}
 	return timeout

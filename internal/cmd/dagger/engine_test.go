@@ -8,7 +8,9 @@ import (
 
 	"github.com/dagger/dagger/dagql/idtui"
 	"github.com/dagger/dagger/engine"
+	enginetel "github.com/dagger/dagger/engine/telemetry"
 	"github.com/dagger/dagger/engine/telemetryattrs"
+	telemetry "github.com/dagger/otel-go"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -78,16 +80,16 @@ func TestEngineTelemetryConfigDefaultsToFrontendAndCloud(t *testing.T) {
 	})
 
 	require.True(t, cfg.Detect)
-	require.Equal(t, cloudTelemetryIndexes{spans: 0, logs: 1, metrics: 1}, cloud,
+	require.Equal(t, cloudTelemetryIndexes{spans: 0, logs: 0, metrics: 1}, cloud,
 		"the indexes locate the Cloud exporters, so engine telemetry can be forwarded without them")
-	require.Equal(t, []sdklog.Exporter{localLogs}, withoutIndex(cfg.LiveLogExporters, cloud.logs))
+	require.Empty(t, withoutIndex(cfg.LiveLogExporters, cloud.logs), "frontend logs are installed separately with a blocking processor")
 	require.Equal(t, []sdkmetric.Exporter{localMetrics}, withoutIndex(cfg.LiveMetricExporters, cloud.metrics))
 	require.Empty(t, withoutIndex(cfg.SpanProcessors, cloud.spans))
 	require.Len(t, frontend.SpanExporterCalls(), 1)
-	require.Len(t, frontend.LogExporterCalls(), 1)
+	require.Empty(t, frontend.LogExporterCalls())
 	require.Len(t, frontend.MetricExporterCalls(), 1)
 	require.Equal(t, []sdktrace.SpanExporter{localSpans}, cfg.LiveTraceExporters)
-	require.Equal(t, []sdklog.Exporter{localLogs, cloudLogs}, cfg.LiveLogExporters)
+	require.Equal(t, []sdklog.Exporter{cloudLogs}, cfg.LiveLogExporters)
 	require.Equal(t, []sdkmetric.Exporter{localMetrics, cloudMetrics}, cfg.LiveMetricExporters)
 	require.Len(t, cfg.SpanProcessors, 1, "Cloud spans use their independent large-queue processor")
 	t.Cleanup(func() {
@@ -294,3 +296,45 @@ func TestConfiguredRunnerHost(t *testing.T) {
 		require.Equal(t, engine.DefaultCloudRunnerHost, configuredRunnerHost())
 	})
 }
+
+// EOF emission must share the drain deadline when a stalled exporter leaves
+// the queue full. It must return a failure rather than block before Shutdown.
+func TestCLIOutputDrainBoundsEOFEmission(t *testing.T) {
+	exporter := &cliDrainBlockedExporter{entered: make(chan struct{})}
+	processor := enginetel.NewBlockingLogProcessor(exporter, 1, 1, 0)
+	ctx := telemetry.WithLoggerProvider(t.Context(), sdklog.NewLoggerProvider(sdklog.WithProcessor(processor)))
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		processor.Shutdown(cleanupCtx)
+	})
+	var record sdklog.Record
+	require.NoError(t, processor.OnEmit(ctx, &record))
+	select {
+	case <-exporter.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("export did not start")
+	}
+	require.NoError(t, processor.OnEmit(ctx, &record)) // fill the waiting queue
+	drainCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- drainCLIOutput(drainCtx, processor) }()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(5 * time.Second):
+		t.Fatal("EOF emission exceeded the drain deadline")
+	}
+}
+
+type cliDrainBlockedExporter struct{ entered chan struct{} }
+
+func (e *cliDrainBlockedExporter) Export(ctx context.Context, _ []sdklog.Record) error {
+	close(e.entered)
+	<-ctx.Done()
+	return context.Cause(ctx)
+}
+
+func (*cliDrainBlockedExporter) Shutdown(context.Context) error   { return nil }
+func (*cliDrainBlockedExporter) ForceFlush(context.Context) error { return nil }

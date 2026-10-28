@@ -521,7 +521,7 @@ func (snapshot *SpanSnapshot) ProcessAttribute(name string, val any) { //nolint:
 		// here and all the conversion error handling code is
 		// annoying
 		if err := recover(); err != nil {
-			slog.Warn("panic processing attribute", "name", name, "val", val, "err", err)
+			slog.Diagnostic().Warn("panic processing attribute", "name", name, "val", val, "err", err)
 		}
 	}()
 
@@ -704,7 +704,7 @@ func (snapshot *SpanSnapshot) ProcessAttribute(name string, val any) { //nolint:
 
 	default:
 		if err := snapshot.ExtraAttributes.setValue(name, val); err != nil {
-			slog.Warn("failed to marshal attribute", "attribute", name, "val", val)
+			slog.Diagnostic().Warn("failed to marshal attribute", "attribute", name, "val", val)
 			return
 		}
 	}
