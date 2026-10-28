@@ -2461,17 +2461,19 @@ ReadBarrierResourceMismatchMiss(i) ==
 \* after attachment and payload loading succeed. The upsert keeps the expiry
 \* computed during lookup; TTL values are abstracted from this model. The
 \* registration guard prevents resurrection if the result was collected in
-\* the interval before this lock acquisition.
+\* the interval before this lock acquisition. Only an upsert that changes
+\* the edge holds egraphMu for writing: the code first checks, under the
+\* read lock, whether the result is collected or already persisted, and
+\* then changes nothing (persistedEdgeUpsertUnchangedLocked).
 PersistHit(i) ==
-    \* holds egraphMu for writing; see WriteLockAvailable
-    /\ WriteLockAvailable
     /\ invocations[i].phase = "persistHit"
     /\ LET r == invocations[i].resId
-           persisted == IF res[r].registered /\ ~res[r].persisted
-                        THEN [res EXCEPT ![r].persisted = TRUE,
-                                         ![r].own = @ + 1]
-                        ELSE res
-       IN /\ res' = persisted
+           changes == res[r].registered /\ ~res[r].persisted
+       IN /\ changes => WriteLockAvailable
+          /\ res' = IF changes
+                    THEN [res EXCEPT ![r].persisted = TRUE,
+                                     ![r].own = @ + 1]
+                    ELSE res
           /\ invocations' = [invocations EXCEPT
                ![i].phase = "returning"]
     /\ UNCHANGED <<ongoingCalls, ongoingCallIndex, sessionEdges, countedEdges,
