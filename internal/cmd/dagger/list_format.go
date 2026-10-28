@@ -114,7 +114,8 @@ func writeArtifactTable(out io.Writer, items []listedArtifact, names map[string]
 	if described {
 		header = append(header, "DESCRIPTION")
 	}
-	writer := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	buffer := &artifactTableBuffer{out: out}
+	writer := tabwriter.NewWriter(buffer, 0, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(writer, strings.Join(header, "\t")); err != nil {
 		return err
 	}
@@ -144,7 +145,53 @@ func writeArtifactTable(out io.Writer, items []listedArtifact, names map[string]
 			return err
 		}
 	}
-	return writer.Flush()
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	return buffer.Flush()
+}
+
+// tabwriter writes whole cells and ASCII padding. Coalesce those writes without
+// splitting a cell: an arbitrary byte boundary can split a UTF-8 character and
+// turn an otherwise valid table into invalid telemetry string records.
+type artifactTableBuffer struct {
+	out  io.Writer
+	data []byte
+}
+
+const artifactTableBufferSize = 4096
+
+func (b *artifactTableBuffer) Write(p []byte) (int, error) {
+	if len(b.data)+len(p) > artifactTableBufferSize {
+		if err := b.Flush(); err != nil {
+			return 0, err
+		}
+	}
+	if len(p) >= artifactTableBufferSize {
+		// A large cell is already a complete UTF-8 string. Forward it whole
+		// rather than retaining a second copy or cutting it into records.
+		n, err := b.out.Write(p)
+		if n != len(p) && err == nil {
+			err = io.ErrShortWrite
+		}
+		return n, err
+	}
+	b.data = append(b.data, p...)
+	return len(p), nil
+}
+
+func (b *artifactTableBuffer) Flush() error {
+	if len(b.data) == 0 {
+		return nil
+	}
+	n, err := b.out.Write(b.data)
+	if n != len(b.data) && err == nil {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		b.data = b.data[:0]
+	}
+	return err
 }
 
 // compareArtifactDimensions orders the module dimension first and type

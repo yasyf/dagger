@@ -2,9 +2,11 @@ package daggercmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/dagger/dagger/dagql/dagui"
 	"github.com/dagger/dagger/engine"
@@ -174,8 +176,7 @@ func withEngineAction(
 			Frontend.SetTelemetryError(err)
 		}))
 		cleanup.Add("close telemetry", func() error {
-			cleanupTelemetry(rerr)
-			return nil
+			return cleanupTelemetry(rerr)
 		})
 
 		params, err := finalizeEngineParams(ctx, params)
@@ -392,8 +393,7 @@ func withLazySessions(
 			Frontend.SetTelemetryError(err)
 		}))
 		cleanup.Add("close telemetry", func() error {
-			cleanupTelemetry(rerr)
-			return nil
+			return cleanupTelemetry(rerr)
 		})
 
 		connect := func(ctx context.Context) (*client.Client, func(), error) {
@@ -479,7 +479,8 @@ type configuredCloudExportersFunc func(context.Context) (sdktrace.SpanExporter, 
 // cloudTelemetryIndexes locates the CLI's Dagger Cloud exporters in the
 // pipeline telemetry.Init builds: the span processor's index in the
 // telemetry.SpanProcessors Init sets, and the log and metric exporters'
-// indexes among the ones Init appends, in Config order, to
+// indexes among the ones Init appends, in Config order (explicit log
+// processors precede live log exporters), to
 // telemetry.LogProcessors and telemetry.MetricExporters. Each is -1 when the
 // CLI does not export to Cloud.
 type cloudTelemetryIndexes struct {
@@ -516,7 +517,9 @@ func engineTelemetryConfigWithCloud(ctx context.Context, configuredCloudExporter
 	cloud := noCloudTelemetry
 	if !frontendTelemetryDisabled(ctx) {
 		cfg.LiveTraceExporters = append(cfg.LiveTraceExporters, Frontend.SpanExporter())
-		cfg.LiveLogExporters = append(cfg.LiveLogExporters, Frontend.LogExporter())
+		cfg.LogProcessors = append(cfg.LogProcessors, &outputLogProcessor{
+			Processor: telemetry.NewBlockingLogProcessor(Frontend.LogExporter()),
+		})
 		cfg.LiveMetricExporters = append(cfg.LiveMetricExporters, Frontend.MetricExporter())
 	}
 	if !skipSharedTelemetryExporters {
@@ -530,7 +533,7 @@ func engineTelemetryConfigWithCloud(ctx context.Context, configuredCloudExporter
 			// the pipeline by telemetry.Init, same as a LiveTraceExporter would be.)
 			cloud = cloudTelemetryIndexes{
 				spans:   len(cfg.SpanProcessors),
-				logs:    len(cfg.LiveLogExporters),
+				logs:    len(cfg.LogProcessors) + len(cfg.LiveLogExporters),
 				metrics: len(cfg.LiveMetricExporters),
 			}
 			cfg.SpanProcessors = append(cfg.SpanProcessors, enginetel.NewLargeQueueLiveSpanProcessor(spans))
@@ -541,7 +544,7 @@ func engineTelemetryConfigWithCloud(ctx context.Context, configuredCloudExporter
 	return cfg, cloud
 }
 
-func initEngineTelemetry(ctx context.Context) (context.Context, func(error)) {
+func initEngineTelemetry(ctx context.Context) (context.Context, func(error) error) {
 	cfg, cloud := engineTelemetryConfig(ctx)
 	// Init replaces telemetry.SpanProcessors but appends to LogProcessors and
 	// MetricExporters, which may hold an earlier Init's entries.
@@ -573,6 +576,10 @@ func initEngineTelemetry(ctx context.Context) (context.Context, func(error)) {
 	ctx, span := Tracer().Start(ctx, name)
 
 	// Set up global slog to log to the primary span output.
+	// Frontend ingestion can itself log diagnostics. Queue those separately so
+	// it never waits for the blocking output processor from inside its exporter.
+	diagnostics := newDiagnosticLoggerProvider(telemetry.LogProcessors)
+	ctx = slog.ContextWithLoggerProvider(ctx, diagnostics)
 	slog.SetDefault(slog.SpanLogger(ctx, InstrumentationLibrary))
 
 	// Set the root span as the target for "global logs"
@@ -588,11 +595,19 @@ func initEngineTelemetry(ctx context.Context) (context.Context, func(error)) {
 	rootCmd.SetOut(stdio.Stdout)
 	rootCmd.SetErr(stdio.Stderr)
 
-	return ctx, func(rerr error) {
+	return ctx, func(rerr error) error {
 		rootCmd.SetOut(oldOut)
 		rootCmd.SetErr(oldErr)
 		stdio.Close()
+		rerr = errors.Join(rerr, outputLogError(cfg.LogProcessors))
 		telemetry.EndWithCause(span, &rerr)
-		telemetry.Close()
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		diagnosticErr := diagnostics.Shutdown(flushCtx)
+		closeErr := telemetry.CloseWithError()
+		if err := errors.Join(diagnosticErr, closeErr); err != nil {
+			Frontend.SetTelemetryError(err)
+		}
+		return outputLogError(cfg.LogProcessors)
 	}
 }
