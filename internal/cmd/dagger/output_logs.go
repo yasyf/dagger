@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	telemetry "github.com/dagger/otel-go"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
@@ -16,6 +17,23 @@ import (
 type outputLogProcessor struct {
 	sdklog.Processor
 	err atomic.Pointer[error]
+}
+
+// Capture exporter failures at the point where they occur. A batch processor
+// reports asynchronous errors to the OTel error handler, not to ForceFlush.
+func newOutputLogProcessor(exporter sdklog.Exporter) *outputLogProcessor {
+	p := &outputLogProcessor{}
+	p.Processor = telemetry.NewBlockingLogProcessor(&outputLogExporter{Exporter: exporter, processor: p})
+	return p
+}
+
+type outputLogExporter struct {
+	sdklog.Exporter
+	processor *outputLogProcessor
+}
+
+func (e *outputLogExporter) Export(ctx context.Context, records []sdklog.Record) error {
+	return e.processor.recordError(e.Exporter.Export(ctx, records))
 }
 
 func (p *outputLogProcessor) OnEmit(ctx context.Context, record *sdklog.Record) error {

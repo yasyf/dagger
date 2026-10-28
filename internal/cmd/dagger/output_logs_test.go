@@ -78,3 +78,22 @@ func TestDiagnosticAdmissionFailureRemainsBestEffort(t *testing.T) {
 	require.ErrorIs(t, p.OnEmit(t.Context(), &record), expected)
 	require.ErrorIs(t, outputLogError([]sdklog.Processor{p}), expected, "ordinary delivery failure remains fatal")
 }
+
+// Export succeeds asynchronously from the emitter's point of view, so cleanup
+// must retain the error even if ForceFlush and Shutdown return nil.
+func TestAsyncOutputExportFailureIsReturnedToCommandCleanup(t *testing.T) {
+	expected := errors.New("frontend export failed")
+	p := newOutputLogProcessor(&exportErrorLogExporter{err: expected})
+	var r sdklog.Record
+	require.NoError(t, p.OnEmit(t.Context(), &r))
+	require.NoError(t, p.ForceFlush(t.Context()))
+	require.NoError(t, p.Shutdown(t.Context()))
+	require.ErrorIs(t, outputLogError([]sdklog.Processor{p}), expected)
+}
+
+type exportErrorLogExporter struct {
+	countingLogExporter
+	err error
+}
+
+func (e *exportErrorLogExporter) Export(context.Context, []sdklog.Record) error { return e.err }

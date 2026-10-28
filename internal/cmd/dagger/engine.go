@@ -517,9 +517,7 @@ func engineTelemetryConfigWithCloud(ctx context.Context, configuredCloudExporter
 	cloud := noCloudTelemetry
 	if !frontendTelemetryDisabled(ctx) {
 		cfg.LiveTraceExporters = append(cfg.LiveTraceExporters, Frontend.SpanExporter())
-		cfg.LogProcessors = append(cfg.LogProcessors, &outputLogProcessor{
-			Processor: telemetry.NewBlockingLogProcessor(Frontend.LogExporter()),
-		})
+		cfg.LogProcessors = append(cfg.LogProcessors, newOutputLogProcessor(Frontend.LogExporter()))
 		cfg.LiveMetricExporters = append(cfg.LiveMetricExporters, Frontend.MetricExporter())
 	}
 	if !skipSharedTelemetryExporters {
