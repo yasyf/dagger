@@ -358,11 +358,12 @@ type ContainerFileLazy struct {
 
 type ContainerWithDirectoryLazy struct {
 	LazyState
-	Parent dagql.ObjectResult[*Container]
-	Path   string
-	Source dagql.ObjectResult[*Directory]
-	Filter CopyFilter
-	Owner  string
+	Parent         dagql.ObjectResult[*Container]
+	Path           string
+	Source         dagql.ObjectResult[*Directory]
+	Filter         CopyFilter
+	Owner          string
+	FollowSymlinks bool
 }
 
 type ContainerWithFileLazy struct {
@@ -790,6 +791,7 @@ type persistedContainerWithDirectoryLazy struct {
 	SourceResultID uint64     `json:"sourceResultID"`
 	Filter         CopyFilter `json:"filter,omitempty"`
 	Owner          string     `json:"owner,omitempty"`
+	FollowSymlinks bool       `json:"followSymlinks,omitempty"`
 }
 
 type persistedContainerDirectoryLazy struct {
@@ -3865,7 +3867,7 @@ func (lazy *ContainerWithDirectoryLazy) EvaluateContainerGroup(ctx context.Conte
 		func(mnt *ContainerMount) bool { return mnt.FileSource != nil },
 		lazy.Source,
 		func(ctx context.Context) error {
-			_, err := container.WithDirectory(ctx, lazy.Parent, lazy.Path, lazy.Source, lazy.Filter, lazy.Owner)
+			_, err := container.WithDirectory(ctx, lazy.Parent, lazy.Path, lazy.Source, lazy.Filter, lazy.Owner, lazy.FollowSymlinks)
 			return err
 		},
 	)
@@ -3895,6 +3897,7 @@ func (lazy *ContainerWithDirectoryLazy) EncodePersisted(ctx context.Context, enc
 		return nil, err
 	}
 	return json.Marshal(persistedContainerWithDirectoryLazy{
+		FollowSymlinks: lazy.FollowSymlinks,
 		ParentResultID: parentID,
 		Path:           lazy.Path,
 		SourceResultID: sourceID,
@@ -5279,12 +5282,13 @@ func decodePersistedContainerRecipe(
 			return nil, err
 		}
 		return &ContainerWithDirectoryLazy{
-			LazyState: NewLazyState(),
-			Parent:    parent,
-			Path:      persisted.Path,
-			Source:    source,
-			Filter:    persisted.Filter,
-			Owner:     persisted.Owner,
+			FollowSymlinks: persisted.FollowSymlinks,
+			LazyState:      NewLazyState(),
+			Parent:         parent,
+			Path:           persisted.Path,
+			Source:         source,
+			Filter:         persisted.Filter,
+			Owner:          persisted.Owner,
 		}, nil
 	case "withFile", "withNewFile":
 		var persisted persistedContainerWithFileLazy
@@ -5976,6 +5980,7 @@ func (container *Container) WithDirectory(
 	src dagql.ObjectResult[*Directory],
 	filter CopyFilter,
 	owner string,
+	followSymlinks bool,
 ) (*Container, error) {
 	mnt, mntSubpath, err := locatePath(container, subdir)
 	if err != nil {
@@ -5989,7 +5994,7 @@ func (container *Container) WithDirectory(
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmount %s: %w", mnt.Target, err)
 		}
-		return container.WithDirectory(ctx, parent, subdir, src, filter, owner)
+		return container.WithDirectory(ctx, parent, subdir, src, filter, owner, followSymlinks)
 	}
 
 	resolvedOwner := owner
@@ -6016,7 +6021,7 @@ func (container *Container) WithDirectory(
 		return nil, err
 	}
 	container.recordPartDiagnostic("writerBody", "")
-	if err := dir.withDirectory(ctx, targetParent, mntSubpath, src, filter, resolvedOwner, nil, container.directoryCommitObserver()); err != nil {
+	if err := dir.withDirectory(ctx, targetParent, mntSubpath, src, filter, resolvedOwner, nil, followSymlinks, container.directoryCommitObserver()); err != nil {
 		return nil, err
 	}
 	container.ImageRef = ""

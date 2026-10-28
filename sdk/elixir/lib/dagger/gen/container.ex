@@ -848,7 +848,8 @@ defmodule Dagger.Container do
           {:owner, String.t() | nil},
           {:inherit_owner, boolean() | nil},
           {:expand, boolean() | nil},
-          {:permissions, integer() | nil}
+          {:permissions, integer() | nil},
+          {:follow_symlinks, boolean() | nil}
         ]) :: Dagger.Container.t()
   def with_directory(%__MODULE__{} = container, path, source, optional_args \\ []) do
     query_builder =
@@ -863,6 +864,7 @@ defmodule Dagger.Container do
       |> QB.maybe_put_arg("inheritOwner", optional_args[:inherit_owner])
       |> QB.maybe_put_arg("expand", optional_args[:expand])
       |> QB.maybe_put_arg("permissions", optional_args[:permissions])
+      |> QB.maybe_put_arg("followSymlinks", optional_args[:follow_symlinks])
 
     %Dagger.Container{
       query_builder: query_builder,

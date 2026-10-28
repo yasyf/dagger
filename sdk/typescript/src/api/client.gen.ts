@@ -1121,6 +1121,11 @@ export type ContainerWithDirectoryOpts = {
    */
   expand?: boolean
   permissions?: number
+
+  /**
+   * Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.
+   */
+  followSymlinks?: boolean
 }
 
 export type ContainerWithDockerHealthcheckOpts = {
@@ -1918,6 +1923,11 @@ export type DirectoryWithDirectoryOpts = {
    * Permission given to the copied directory and contents (e.g., 0755).
    */
   permissions?: number
+
+  /**
+   * Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.
+   */
+  followSymlinks?: boolean
 }
 
 export type DirectoryWithFileOpts = {
@@ -7769,6 +7779,7 @@ export class Container extends BaseClient {
    * If the group is omitted, it defaults to the same as the user.
    * @param opts.inheritOwner Set the owner to the container's current user.
    * @param opts.expand Replace "${VAR}" or "$VAR" in the value of path according to the current environment variables defined in the container (e.g. "/$VAR/foo").
+   * @param opts.followSymlinks Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.
    */
   withDirectory = (
     path: string,
@@ -9153,6 +9164,7 @@ export class Directory extends BaseClient {
    *
    * If the group is omitted, it defaults to the same as the user.
    * @param opts.permissions Permission given to the copied directory and contents (e.g., 0755).
+   * @param opts.followSymlinks Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.
    */
   withDirectory = (
     path: string,

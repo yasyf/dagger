@@ -255,6 +255,7 @@ class Directory extends Client\AbstractObject implements Client\IdAble, Exportab
         ?bool $gitignore = false,
         ?string $owner = '',
         ?int $permissions = null,
+        ?bool $followSymlinks = false,
     ): Directory {
         $innerQueryBuilder = new \Dagger\Client\QueryBuilder('withDirectory');
         $innerQueryBuilder->setArgument('path', $path);
@@ -273,6 +274,9 @@ class Directory extends Client\AbstractObject implements Client\IdAble, Exportab
         }
         if (null !== $permissions) {
         $innerQueryBuilder->setArgument('permissions', $permissions);
+        }
+        if (null !== $followSymlinks) {
+        $innerQueryBuilder->setArgument('followSymlinks', $followSymlinks);
         }
         return new \Dagger\Directory($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
     }

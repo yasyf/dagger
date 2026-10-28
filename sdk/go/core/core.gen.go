@@ -4880,6 +4880,8 @@ type ContainerWithDirectoryOpts struct {
 	Expand bool
 
 	Permissions int
+	// Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.
+	FollowSymlinks bool
 }
 
 // Return a new container snapshot, with a directory added to its filesystem
@@ -4914,6 +4916,10 @@ func (r *Container) WithDirectory(path string, source *Directory, opts ...Contai
 		// `permissions` optional argument
 		if !querybuilder.IsZeroValue(opts[i].Permissions) {
 			q = q.Arg("permissions", opts[i].Permissions)
+		}
+		// `followSymlinks` optional argument
+		if !querybuilder.IsZeroValue(opts[i].FollowSymlinks) {
+			q = q.Arg("followSymlinks", opts[i].FollowSymlinks)
 		}
 	}
 	q = q.Arg("path", path)
@@ -7250,6 +7256,8 @@ type DirectoryWithDirectoryOpts struct {
 	Owner string
 	// Permission given to the copied directory and contents (e.g., 0755).
 	Permissions int
+	// Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.
+	FollowSymlinks bool
 }
 
 // Return a snapshot with a directory added
@@ -7276,6 +7284,10 @@ func (r *Directory) WithDirectory(path string, source *Directory, opts ...Direct
 		// `permissions` optional argument
 		if !querybuilder.IsZeroValue(opts[i].Permissions) {
 			q = q.Arg("permissions", opts[i].Permissions)
+		}
+		// `followSymlinks` optional argument
+		if !querybuilder.IsZeroValue(opts[i].FollowSymlinks) {
+			q = q.Arg("followSymlinks", opts[i].FollowSymlinks)
 		}
 	}
 	q = q.Arg("path", path)

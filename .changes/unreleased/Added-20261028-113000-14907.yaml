@@ -1,0 +1,11 @@
+kind: Added
+body: |
+  Add the `followSymlinks` option to `Directory.withDirectory` and
+  `Container.withDirectory`.
+
+  Set this option to `true` to copy symlink targets. The default value
+  is `false`. The engine resolves all targets within the source snapshot.
+time: 2026-10-28T18:30:00Z
+custom:
+  Author: tiborvass
+  PR: "14907"

@@ -612,6 +612,7 @@ func (s *containerSchema) Install(srv *dagql.Server) {
 				dagql.Arg("expand").Doc(`Replace "${VAR}" or "$VAR" in the value of path according to the current `+
 					`environment variables defined in the container (e.g. "/$VAR/foo").`),
 				dagql.Arg("permissions").View(AfterVersion("v0.21.0")),
+				dagql.Arg("followSymlinks").Doc(`Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.`).View(AfterVersion("v1.0.0-0")),
 			),
 
 		dagql.NodeFunc("withoutDirectory", s.withoutDirectory).
@@ -3974,12 +3975,13 @@ func (s *containerSchema) withDirectory(ctx context.Context, parent dagql.Object
 		return nil, err
 	}
 	ctr.Lazy = &core.ContainerWithDirectoryLazy{
-		LazyState: core.NewLazyState(),
-		Parent:    parent,
-		Path:      path,
-		Source:    dir,
-		Filter:    args.CopyFilter,
-		Owner:     owner,
+		FollowSymlinks: args.FollowSymlinks,
+		LazyState:      core.NewLazyState(),
+		Parent:         parent,
+		Path:           path,
+		Source:         dir,
+		Filter:         args.CopyFilter,
+		Owner:          owner,
 	}
 	if err := evaluateOverBuiltParent(ctx, ctr, parentPendingLazy); err != nil {
 		return nil, err

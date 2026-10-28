@@ -1880,6 +1880,13 @@ type Container implements Exportable & Node & Syncer {
     expand: Boolean = false
 
     permissions: Int
+
+    """
+    Recursively copy symlink targets instead of preserving symlinks. Targets are
+    resolved within the source snapshot. Dangling links and symlink cycles cause
+    an error.
+    """
+    followSymlinks: Boolean = false
   ): Container!
 
   """
@@ -2964,6 +2971,13 @@ type Directory implements Exportable & Node & Syncer {
 
     """Permission given to the copied directory and contents (e.g., 0755)."""
     permissions: Int
+
+    """
+    Recursively copy symlink targets instead of preserving symlinks. Targets are
+    resolved within the source snapshot. Dangling links and symlink cycles cause
+    an error.
+    """
+    followSymlinks: Boolean = false
   ): Directory!
 
   """Return a snapshot with some paths included or excluded"""

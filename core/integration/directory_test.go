@@ -3173,3 +3173,94 @@ func (DirectorySuite) TestDirCaching(ctx context.Context, t *testctx.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, out, "")
 }
+
+func (DirectorySuite) TestWithDirectoryFollowSymlinks(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	dag := sdkcore.NewQuery(c)
+	source := dag.Directory().
+		WithNewFile("target/nested/keep.txt", "hello").
+		WithNewFile("target/nested/skip.txt", "skip").
+		WithNewFile("target/.gitignore", "skip.txt\n").
+		WithSymlink("nested/keep.txt", "target/file-link").
+		WithSymlink("../target", "src/relative").
+		WithSymlink("/target", "src/absolute").
+		WithSymlink("relative", "src/chain").
+		Directory("src")
+
+	for _, tc := range []struct {
+		name string
+		copy func(bool) *sdkcore.Directory
+	}{
+		{"directory", func(follow bool) *sdkcore.Directory {
+			return dag.Directory().WithDirectory("out", source, sdkcore.DirectoryWithDirectoryOpts{FollowSymlinks: follow}).Directory("out")
+		}},
+		{"container", func(follow bool) *sdkcore.Directory {
+			return dag.Container().WithDirectory("/out", source, sdkcore.ContainerWithDirectoryOpts{FollowSymlinks: follow}).Directory("/out")
+		}},
+		{"container mount", func(follow bool) *sdkcore.Directory {
+			return dag.Container().WithMountedDirectory("/mount", dag.Directory()).
+				WithDirectory("/mount/out", source, sdkcore.ContainerWithDirectoryOpts{FollowSymlinks: follow}).Directory("/mount/out")
+		}},
+	} {
+		t.Run(tc.name, func(ctx context.Context, t *testctx.T) {
+			for _, follow := range []bool{false, true} {
+				out := tc.copy(follow)
+				for _, name := range []string{"relative", "absolute", "chain"} {
+					stat, err := out.Stat(ctx, name, sdkcore.DirectoryStatOpts{DoNotFollowSymlinks: true})
+					require.NoError(t, err)
+					typ, err := stat.FileType(ctx)
+					require.NoError(t, err)
+					if !follow {
+						require.Equal(t, sdkcore.FileTypeSymlink, typ)
+						continue
+					}
+					require.Equal(t, sdkcore.FileTypeDirectory, typ)
+					stat, err = out.Stat(ctx, name+"/file-link", sdkcore.DirectoryStatOpts{DoNotFollowSymlinks: true})
+					require.NoError(t, err)
+					typ, err = stat.FileType(ctx)
+					require.NoError(t, err)
+					require.Equal(t, sdkcore.FileTypeRegular, typ)
+					content, err := out.File(name + "/file-link").Contents(ctx)
+					require.NoError(t, err)
+					require.Equal(t, "hello", content)
+				}
+			}
+		})
+	}
+
+	t.Run("filters use the symlink path", func(ctx context.Context, t *testctx.T) {
+		out := dag.Directory().WithDirectory("out", source, sdkcore.DirectoryWithDirectoryOpts{
+			FollowSymlinks: true, Include: []string{"relative/nested/*.txt"}, Exclude: []string{"**/skip.txt"},
+		})
+		content, err := out.File("out/relative/nested/keep.txt").Contents(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "hello", content)
+		paths, err := out.Glob(ctx, "**/*.txt")
+		require.NoError(t, err)
+		require.Equal(t, []string{"out/relative/nested/keep.txt"}, paths)
+	})
+
+	t.Run("gitignore follows links within the source", func(ctx context.Context, t *testctx.T) {
+		out := dag.Directory().WithDirectory("out", source, sdkcore.DirectoryWithDirectoryOpts{FollowSymlinks: true, Gitignore: true})
+		content, err := out.File("out/relative/nested/keep.txt").Contents(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "hello", content)
+		paths, err := out.Glob(ctx, "**/skip.txt")
+		require.NoError(t, err)
+		require.Empty(t, paths)
+	})
+
+	for _, target := range []string{"missing", ".", "link", "/etc/hostname"} {
+		t.Run("invalid target "+target, func(ctx context.Context, t *testctx.T) {
+			source := dag.Directory().WithSymlink(target, "link")
+			_, err := dag.Directory().WithDirectory("out", source, sdkcore.DirectoryWithDirectoryOpts{FollowSymlinks: true}).Sync(ctx)
+			require.Error(t, err)
+			_, err = dag.Container().WithDirectory("/out", source, sdkcore.ContainerWithDirectoryOpts{FollowSymlinks: true}).Sync(ctx)
+			require.Error(t, err)
+			_, err = dag.Directory().WithDirectory("out", source, sdkcore.DirectoryWithDirectoryOpts{FollowSymlinks: true, Exclude: []string{"link"}}).Sync(ctx)
+			require.NoError(t, err)
+			_, err = dag.Container().WithDirectory("/out", source, sdkcore.ContainerWithDirectoryOpts{FollowSymlinks: true, Exclude: []string{"link"}}).Sync(ctx)
+			require.NoError(t, err)
+		})
+	}
+}

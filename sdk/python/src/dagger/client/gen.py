@@ -4616,6 +4616,7 @@ class Container(Type):
         inherit_owner: bool | None = False,
         expand: bool | None = False,
         permissions: int | None = None,
+        follow_symlinks: bool | None = False,
     ) -> Self:
         """Return a new container snapshot, with a directory added to its
         filesystem
@@ -4646,6 +4647,10 @@ class Container(Type):
             current environment variables defined in the container (e.g.
             "/$VAR/foo").
         permissions:
+        follow_symlinks:
+            Recursively copy symlink targets instead of preserving symlinks.
+            Targets are resolved within the source snapshot. Dangling links
+            and symlink cycles cause an error.
         """
         _args = [
             Arg("path", path),
@@ -4657,6 +4662,7 @@ class Container(Type):
             Arg("inheritOwner", inherit_owner, False),
             Arg("expand", expand, False),
             Arg("permissions", permissions, None),
+            Arg("followSymlinks", follow_symlinks, False),
         ]
         _ctx = self._select("withDirectory", _args)
         return Container(_ctx)
@@ -6903,6 +6909,7 @@ class Directory(Type):
         gitignore: bool | None = False,
         owner: str | None = "",
         permissions: int | None = None,
+        follow_symlinks: bool | None = False,
     ) -> Self:
         """Return a snapshot with a directory added
 
@@ -6928,6 +6935,10 @@ class Directory(Type):
         permissions:
             Permission given to the copied directory and contents (e.g.,
             0755).
+        follow_symlinks:
+            Recursively copy symlink targets instead of preserving symlinks.
+            Targets are resolved within the source snapshot. Dangling links
+            and symlink cycles cause an error.
         """
         _args = [
             Arg("path", path),
@@ -6937,6 +6948,7 @@ class Directory(Type):
             Arg("gitignore", gitignore, False),
             Arg("owner", owner, ""),
             Arg("permissions", permissions, None),
+            Arg("followSymlinks", follow_symlinks, False),
         ]
         _ctx = self._select("withDirectory", _args)
         return Directory(_ctx)

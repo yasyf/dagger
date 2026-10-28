@@ -3260,6 +3260,9 @@ pub struct ContainerWithDirectoryOpts<'a> {
     /// Replace "${VAR}" or "$VAR" in the value of path according to the current environment variables defined in the container (e.g. "/$VAR/foo").
     #[builder(setter(into, strip_option), default)]
     pub expand: Option<bool>,
+    /// Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.
+    #[builder(setter(into, strip_option), default)]
+    pub follow_symlinks: Option<bool>,
     /// Apply .gitignore rules when writing the directory.
     #[builder(setter(into, strip_option), default)]
     pub gitignore: Option<bool>,
@@ -5161,6 +5164,9 @@ impl Container {
         if let Some(permissions) = opts.permissions {
             query = query.arg("permissions", permissions);
         }
+        if let Some(follow_symlinks) = opts.follow_symlinks {
+            query = query.arg("followSymlinks", follow_symlinks);
+        }
         Container {
             proc: self.proc.clone(),
             selection: query,
@@ -6710,6 +6716,9 @@ pub struct DirectoryWithDirectoryOpts<'a> {
     /// Exclude artifacts that match the given pattern (e.g., ["node_modules/", ".git*"]).
     #[builder(setter(into, strip_option), default)]
     pub exclude: Option<Vec<&'a str>>,
+    /// Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.
+    #[builder(setter(into, strip_option), default)]
+    pub follow_symlinks: Option<bool>,
     /// Apply .gitignore filter rules inside the directory
     #[builder(setter(into, strip_option), default)]
     pub gitignore: Option<bool>,
@@ -7338,6 +7347,9 @@ impl Directory {
         }
         if let Some(permissions) = opts.permissions {
             query = query.arg("permissions", permissions);
+        }
+        if let Some(follow_symlinks) = opts.follow_symlinks {
+            query = query.arg("followSymlinks", follow_symlinks);
         }
         Directory {
             proc: self.proc.clone(),

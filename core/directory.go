@@ -405,12 +405,13 @@ func loadCanonicalScratchDirectory(ctx context.Context) (string, bkcache.Immutab
 
 type DirectoryWithDirectoryLazy struct {
 	LazyState
-	Parent      dagql.ObjectResult[*Directory]
-	DestDir     string
-	Source      dagql.ObjectResult[*Directory]
-	Filter      CopyFilter
-	Owner       string
-	Permissions *int
+	Parent         dagql.ObjectResult[*Directory]
+	DestDir        string
+	Source         dagql.ObjectResult[*Directory]
+	Filter         CopyFilter
+	Owner          string
+	Permissions    *int
+	FollowSymlinks bool
 }
 
 type DirectoryWithDirectoryDockerfileCompatLazy struct {
@@ -556,6 +557,7 @@ type persistedDirectoryWithDirectoryLazy struct {
 	Filter         CopyFilter `json:"filter"`
 	Owner          string     `json:"owner,omitempty"`
 	Permissions    *int       `json:"permissions,omitempty"`
+	FollowSymlinks bool       `json:"followSymlinks,omitempty"`
 }
 
 type persistedDirectoryWithDirectoryDockerfileCompatLazy struct {
@@ -824,13 +826,14 @@ func decodePersistedDirectoryLazy(ctx context.Context, dec *dagql.PersistDecodeC
 			return nil, err
 		}
 		return &DirectoryWithDirectoryLazy{
-			LazyState:   NewLazyState(),
-			Parent:      parent,
-			DestDir:     persisted.DestDir,
-			Source:      source,
-			Filter:      persisted.Filter,
-			Owner:       persisted.Owner,
-			Permissions: persisted.Permissions,
+			FollowSymlinks: persisted.FollowSymlinks,
+			LazyState:      NewLazyState(),
+			Parent:         parent,
+			DestDir:        persisted.DestDir,
+			Source:         source,
+			Filter:         persisted.Filter,
+			Owner:          persisted.Owner,
+			Permissions:    persisted.Permissions,
 		}, nil
 	case persistedDirectoryLazyKindWithDirectoryDockerfileCompat:
 		var persisted persistedDirectoryWithDirectoryDockerfileCompatLazy
@@ -1019,7 +1022,7 @@ func decodePersistedDirectoryLazy(ctx context.Context, dec *dagql.PersistDecodeC
 
 func (lazy *DirectoryWithDirectoryLazy) Evaluate(ctx context.Context, dir *Directory) error {
 	return dir.evaluateLazy(ctx, &lazy.LazyState, "Directory.withDirectory", func(ctx context.Context) error {
-		return dir.WithDirectory(ctx, lazy.Parent, lazy.DestDir, lazy.Source, lazy.Filter, lazy.Owner, lazy.Permissions)
+		return dir.WithDirectory(ctx, lazy.Parent, lazy.DestDir, lazy.Source, lazy.Filter, lazy.Owner, lazy.Permissions, lazy.FollowSymlinks)
 	})
 }
 
@@ -1047,6 +1050,7 @@ func (lazy *DirectoryWithDirectoryLazy) EncodePersisted(ctx context.Context, enc
 		return nil, err
 	}
 	return json.Marshal(persistedDirectoryWithDirectoryLazy{
+		FollowSymlinks: lazy.FollowSymlinks,
 		ParentResultID: parentID,
 		DestDir:        lazy.DestDir,
 		SourceResultID: sourceID,
@@ -2434,8 +2438,9 @@ func (dir *Directory) WithDirectory(
 	filter CopyFilter,
 	owner string,
 	permissions *int,
+	followSymlinks bool,
 ) error {
-	return dir.withDirectory(ctx, parent, destDir, src, filter, owner, permissions, nil)
+	return dir.withDirectory(ctx, parent, destDir, src, filter, owner, permissions, followSymlinks, nil)
 }
 
 func (dir *Directory) withDirectory(
@@ -2446,6 +2451,7 @@ func (dir *Directory) withDirectory(
 	filter CopyFilter,
 	owner string,
 	permissions *int,
+	followSymlinks bool,
 	onCommit func(),
 ) error {
 	dagqlCache, err := dagql.EngineCache(ctx)
@@ -2515,6 +2521,7 @@ func (dir *Directory) withDirectory(
 			Chown:           layercopyOwnership(ownership),
 			Mode:            layercopyMode(permissions),
 			CopyDirContents: true,
+			FollowSymlinks:  followSymlinks,
 			ReplaceExisting: true,
 		}
 

@@ -476,7 +476,8 @@ defmodule Dagger.Directory do
           {:include, [String.t()]},
           {:gitignore, boolean() | nil},
           {:owner, String.t() | nil},
-          {:permissions, integer() | nil}
+          {:permissions, integer() | nil},
+          {:follow_symlinks, boolean() | nil}
         ]) :: Dagger.Directory.t()
   def with_directory(%__MODULE__{} = directory, path, source, optional_args \\ []) do
     query_builder =
@@ -489,6 +490,7 @@ defmodule Dagger.Directory do
       |> QB.maybe_put_arg("gitignore", optional_args[:gitignore])
       |> QB.maybe_put_arg("owner", optional_args[:owner])
       |> QB.maybe_put_arg("permissions", optional_args[:permissions])
+      |> QB.maybe_put_arg("followSymlinks", optional_args[:follow_symlinks])
 
     %Dagger.Directory{
       query_builder: query_builder,

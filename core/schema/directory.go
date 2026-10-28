@@ -167,6 +167,7 @@ func (s *directorySchema) Install(srv *dagql.Server) {
 					`If the group is omitted, it defaults to the same as the user.`),
 				dagql.Arg("permissions").Doc(`Permission given to the copied directory and contents (e.g., 0755).`).
 					View(AfterVersion("v0.21.0")),
+				dagql.Arg("followSymlinks").Doc(`Recursively copy symlink targets instead of preserving symlinks. Targets are resolved within the source snapshot. Dangling links and symlink cycles cause an error.`).View(AfterVersion("v1.0.0-0")),
 			),
 		dagql.NodeFunc("__withDirectoryDockerfileCompat", s.withDirectoryDockerfileCompatContentHashed).
 			IsPersistable().
@@ -514,9 +515,10 @@ func (s *directorySchema) withNewDirectory(ctx context.Context, parent dagql.Obj
 }
 
 type WithDirectoryArgs struct {
-	Path        string
-	Owner       string `default:""`
-	Permissions dagql.Optional[dagql.Int]
+	Path           string
+	Owner          string `default:""`
+	Permissions    dagql.Optional[dagql.Int]
+	FollowSymlinks bool `default:"false"`
 
 	Source    core.DirectoryID
 	Directory core.DirectoryID // legacy, use Source instead
@@ -544,13 +546,14 @@ func (s *directorySchema) withDirectory(ctx context.Context, parent dagql.Object
 		Platform: parent.Self().Platform,
 		Services: slices.Clone(parent.Self().Services),
 		Lazy: &core.DirectoryWithDirectoryLazy{
-			LazyState:   core.NewLazyState(),
-			Parent:      parent,
-			DestDir:     args.Path,
-			Source:      srcDir,
-			Filter:      args.CopyFilter,
-			Owner:       args.Owner,
-			Permissions: perms,
+			FollowSymlinks: args.FollowSymlinks,
+			LazyState:      core.NewLazyState(),
+			Parent:         parent,
+			DestDir:        args.Path,
+			Source:         srcDir,
+			Filter:         args.CopyFilter,
+			Owner:          args.Owner,
+			Permissions:    perms,
 		},
 		Dir:      new(core.LazyAccessor[string, *core.Directory]),
 		Snapshot: new(core.LazyAccessor[bkcache.ImmutableRef, *core.Directory]),

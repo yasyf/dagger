@@ -793,6 +793,7 @@ class Container extends Client\AbstractObject implements Client\IdAble, Exportab
         ?bool $inheritOwner = false,
         ?bool $expand = false,
         ?int $permissions = null,
+        ?bool $followSymlinks = false,
     ): Container {
         $innerQueryBuilder = new \Dagger\Client\QueryBuilder('withDirectory');
         $innerQueryBuilder->setArgument('path', $path);
@@ -817,6 +818,9 @@ class Container extends Client\AbstractObject implements Client\IdAble, Exportab
         }
         if (null !== $permissions) {
         $innerQueryBuilder->setArgument('permissions', $permissions);
+        }
+        if (null !== $followSymlinks) {
+        $innerQueryBuilder->setArgument('followSymlinks', $followSymlinks);
         }
         return new \Dagger\Container($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
     }
